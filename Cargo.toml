@@ -1,0 +1,8 @@
+[package]
+name = "isbn-normalizer"
+version = "0.1.0"
+edition = "2021"
+description = "Normalizes messy ISBN/EAN barcode text and checks the checksum digit."
+license = "MIT"
+
+[dependencies]
