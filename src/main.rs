@@ -1,11 +1,44 @@
 mod isbn;
 
 use isbn::{normalize, to_isbn13, NormalizeError};
-use std::io::{self, BufRead, Write};
+use std::env;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, Write};
+use std::process::ExitCode;
 
-fn main() -> io::Result<()> {
-    let stdin = io::stdin();
-    let mut reader = stdin.lock();
+fn main() -> ExitCode {
+    let args: Vec<String> = env::args().skip(1).collect();
+    let path = match args.as_slice() {
+        [] => None,
+        [p] => Some(p.as_str()),
+        _ => {
+            eprintln!("usage: isbn-normalizer [FILE]");
+            eprintln!("reads lines from FILE, or from stdin if FILE is omitted");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let reader: Box<dyn BufRead> = match path {
+        None => Box::new(io::stdin().lock()),
+        Some(p) => match File::open(p) {
+            Ok(f) => Box::new(BufReader::new(f)),
+            Err(e) => {
+                eprintln!("isbn-normalizer: {p}: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+    };
+
+    match run(reader) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("isbn-normalizer: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run(mut reader: impl BufRead) -> io::Result<()> {
     let stdout = io::stdout();
     let mut out = io::BufWriter::new(stdout.lock());
 

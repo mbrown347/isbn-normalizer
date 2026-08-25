@@ -38,11 +38,15 @@ Blank lines are skipped. Anything that isn't a digit, a hyphen, a space, or a
 trailing `x`/`X` is treated as bad data and reported as such rather than
 stripped out — a stray letter usually means the source field got corrupted.
 
-For large files, pipe from disk instead of typing input by hand:
+For large files, either pipe from disk or pass the path directly:
 
 ```
 cargo run --release < barcodes.txt > normalized.tsv
+cargo run --release -- barcodes.txt > normalized.tsv
 ```
+
+Passing a path avoids an extra shell redirection and gives you a clear error
+if the file doesn't exist, rather than a silently empty run.
 
 ## What's checked
 
@@ -55,8 +59,8 @@ cargo run --release < barcodes.txt > normalized.tsv
 
 ## Status
 
-Early skeleton. Checksum validation and conversion work; see the roadmap for
-what's still missing (hyphenation by registration group, file arguments,
+Early skeleton. Checksum validation, conversion, and file input work; see
+the roadmap for what's still missing (hyphenation by registration group,
 batch summaries).
 
 ## License
