@@ -1,6 +1,6 @@
 mod isbn;
 
-use isbn::{normalize, to_isbn13, NormalizeError};
+use isbn::{hyphenate_isbn13, normalize, to_isbn13, NormalizeError};
 use std::env;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
@@ -65,10 +65,11 @@ fn report(out: &mut impl Write, raw: &str) -> io::Result<()> {
     match normalize(raw) {
         Ok(code) => {
             let isbn13 = to_isbn13(&code);
+            let hyphenated = hyphenate_isbn13(&isbn13);
             writeln!(
                 out,
-                "{raw}\t{:?}\t{}\t{}",
-                code.kind, code.digits, isbn13.digits
+                "{raw}\t{:?}\t{}\t{}\t{}",
+                code.kind, code.digits, isbn13.digits, hyphenated
             )
         }
         Err(NormalizeError::Empty) => Ok(()),

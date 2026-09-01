@@ -143,6 +143,54 @@ pub fn to_isbn13(code: &Normalized) -> Normalized {
     }
 }
 
+/// Inserts hyphens into a canonical 13-digit ISBN at the EAN prefix,
+/// registration group, registrant, and publisher boundaries, e.g.
+/// "9780306406157" -> "978-0-306-40615-7".
+///
+/// Full boundary data (the official ISBN Range Message) is large and
+/// changes over time, so this only hyphenates registration group 0
+/// (English) down to the registrant, since that table is stable and
+/// well documented. Other single-digit groups get a group-level split
+/// with the registrant and publisher left joined, since we don't have
+/// their registrant ranges. Multi-digit groups and unrecognized prefixes
+/// are returned as a flat, unhyphenated string rather than guessed at.
+pub fn hyphenate_isbn13(code: &Normalized) -> String {
+    let d = &code.digits;
+    if code.kind != CodeKind::Isbn13 || d.len() != 13 {
+        return d.clone();
+    }
+    let prefix = &d[0..3];
+    let group = &d[3..4];
+    let rest = &d[4..12];
+    let check = &d[12..13];
+    match group {
+        "0" => {
+            let split = group0_registrant_len(rest);
+            format!("{prefix}-{group}-{}-{}-{check}", &rest[..split], &rest[split..])
+        }
+        "1" | "2" | "3" | "4" | "5" | "7" => {
+            format!("{prefix}-{group}-{rest}-{check}")
+        }
+        _ => d.clone(),
+    }
+}
+
+// Registration group 0 splits its 8-digit registrant+publisher block by
+// numeric range rather than a fixed position; a registrant "00"-"19"
+// leaves 6 digits for the publisher, "85"-"89" leaves only 3, and so on.
+// This is the standard table used by the English-language ISBN agency.
+fn group0_registrant_len(rest: &str) -> usize {
+    let n: u32 = rest.parse().expect("8 ASCII digits");
+    match n {
+        0..=19_999_999 => 2,
+        20_000_000..=69_999_999 => 3,
+        70_000_000..=84_999_999 => 4,
+        85_000_000..=89_999_999 => 5,
+        90_000_000..=94_999_999 => 6,
+        _ => 7,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,5 +249,35 @@ mod tests {
     #[test]
     fn rejects_empty_input() {
         assert_eq!(normalize("   ").unwrap_err(), NormalizeError::Empty);
+    }
+
+    #[test]
+    fn hyphenates_group_zero_by_registrant_range() {
+        // 3-digit registrant (306 falls in the 200-699 band).
+        let n = normalize("9780306406157").unwrap();
+        assert_eq!(hyphenate_isbn13(&n), "978-0-306-40615-7");
+
+        // 2-digit registrant (00 falls in the 00-19 band).
+        let n = normalize("9780004722238").unwrap();
+        assert_eq!(hyphenate_isbn13(&n), "978-0-00-472223-8");
+    }
+
+    #[test]
+    fn hyphenates_other_single_digit_groups_without_registrant_split() {
+        let n = normalize("9782070408504").unwrap();
+        assert_eq!(hyphenate_isbn13(&n), "978-2-07040850-4");
+    }
+
+    #[test]
+    fn leaves_unrecognized_groups_unhyphenated() {
+        let n = normalize("9788000000008").unwrap();
+        assert_eq!(hyphenate_isbn13(&n), "9788000000008");
+    }
+
+    #[test]
+    fn hyphenates_isbn10_converted_to_isbn13() {
+        let n = normalize("0306406152").unwrap();
+        let isbn13 = to_isbn13(&n);
+        assert_eq!(hyphenate_isbn13(&isbn13), "978-0-306-40615-7");
     }
 }
