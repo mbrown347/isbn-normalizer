@@ -57,6 +57,19 @@ cargo run --release -- barcodes.txt > normalized.tsv
 Passing a path avoids an extra shell redirection and gives you a clear error
 if the file doesn't exist, rather than a silently empty run.
 
+Add `--summary` to get a count of valid ISBN-10, valid ISBN-13, and invalid
+lines printed to stderr after the run, which is handy for checking a batch
+without scrolling through every row:
+
+```
+$ printf '0306406152\n1234567890\n' | cargo run --release -- --summary
+0306406152	Isbn10	0306406152	9780306406157	978-0-306-40615-7
+1234567890	INVALID	checksum mismatch: expected check digit '2', found '0'
+2 lines: 1 valid ISBN-10, 0 valid ISBN-13, 1 invalid
+```
+
+The flag and the file path can be given in either order.
+
 ## What's checked
 
 - **ISBN-10**: 9 digits plus a check digit in `0-9` or `X`, verified with the
@@ -71,9 +84,9 @@ if the file doesn't exist, rather than a silently empty run.
 
 ## Status
 
-Early skeleton. Checksum validation, conversion, file input, and
-registration-group hyphenation for the ISBN-13 form work; see the roadmap
-for what's still missing (batch summaries, transposition repair).
+Early skeleton. Checksum validation, conversion, file input,
+registration-group hyphenation for the ISBN-13 form, and batch summaries
+work; see the roadmap for what's still missing (transposition repair).
 
 ## License
 

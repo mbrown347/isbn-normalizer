@@ -1,24 +1,27 @@
 mod isbn;
 
-use isbn::{hyphenate_isbn13, normalize, to_isbn13, NormalizeError};
+use isbn::{hyphenate_isbn13, normalize, to_isbn13, CodeKind, NormalizeError};
 use std::env;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let args: Vec<String> = env::args().skip(1).collect();
-    let path = match args.as_slice() {
-        [] => None,
-        [p] => Some(p.as_str()),
-        _ => {
-            eprintln!("usage: isbn-normalizer [FILE]");
-            eprintln!("reads lines from FILE, or from stdin if FILE is omitted");
-            return ExitCode::FAILURE;
+    let mut path = None;
+    let mut summary = false;
+    for arg in env::args().skip(1) {
+        match arg.as_str() {
+            "--summary" => summary = true,
+            _ if path.is_none() => path = Some(arg),
+            _ => {
+                eprintln!("usage: isbn-normalizer [--summary] [FILE]");
+                eprintln!("reads lines from FILE, or from stdin if FILE is omitted");
+                return ExitCode::FAILURE;
+            }
         }
-    };
+    }
 
-    let reader: Box<dyn BufRead> = match path {
+    let reader: Box<dyn BufRead> = match &path {
         None => Box::new(io::stdin().lock()),
         Some(p) => match File::open(p) {
             Ok(f) => Box::new(BufReader::new(f)),
@@ -29,7 +32,7 @@ fn main() -> ExitCode {
         },
     };
 
-    match run(reader) {
+    match run(reader, summary) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("isbn-normalizer: {e}");
@@ -38,9 +41,36 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(mut reader: impl BufRead) -> io::Result<()> {
+#[derive(Default)]
+struct Counts {
+    isbn10: usize,
+    isbn13: usize,
+    invalid: usize,
+}
+
+impl Counts {
+    fn total(&self) -> usize {
+        self.isbn10 + self.isbn13 + self.invalid
+    }
+}
+
+impl std::fmt::Display for Counts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} lines: {} valid ISBN-10, {} valid ISBN-13, {} invalid",
+            self.total(),
+            self.isbn10,
+            self.isbn13,
+            self.invalid
+        )
+    }
+}
+
+fn run(mut reader: impl BufRead, summary: bool) -> io::Result<()> {
     let stdout = io::stdout();
     let mut out = io::BufWriter::new(stdout.lock());
+    let mut counts = Counts::default();
 
     // Read one line at a time and reuse the buffer instead of collecting the
     // whole input into a String or Vec first. A barcode export can run to
@@ -56,14 +86,23 @@ fn run(mut reader: impl BufRead) -> io::Result<()> {
         if trimmed.trim().is_empty() {
             continue;
         }
-        report(&mut out, trimmed)?;
+        report(&mut out, trimmed, &mut counts)?;
     }
-    out.flush()
+    out.flush()?;
+
+    if summary {
+        eprintln!("{counts}");
+    }
+    Ok(())
 }
 
-fn report(out: &mut impl Write, raw: &str) -> io::Result<()> {
+fn report(out: &mut impl Write, raw: &str, counts: &mut Counts) -> io::Result<()> {
     match normalize(raw) {
         Ok(code) => {
+            match code.kind {
+                CodeKind::Isbn10 => counts.isbn10 += 1,
+                CodeKind::Isbn13 => counts.isbn13 += 1,
+            }
             let isbn13 = to_isbn13(&code);
             let hyphenated = hyphenate_isbn13(&isbn13);
             writeln!(
@@ -73,6 +112,9 @@ fn report(out: &mut impl Write, raw: &str) -> io::Result<()> {
             )
         }
         Err(NormalizeError::Empty) => Ok(()),
-        Err(e) => writeln!(out, "{raw}\tINVALID\t{e}"),
+        Err(e) => {
+            counts.invalid += 1;
+            writeln!(out, "{raw}\tINVALID\t{e}")
+        }
     }
 }
