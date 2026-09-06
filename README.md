@@ -70,6 +70,20 @@ $ printf '0306406152\n1234567890\n' | cargo run --release -- --summary
 
 The flag and the file path can be given in either order.
 
+When a checksum fails, the tool also checks whether swapping two adjacent
+digits would have made it valid — the classic typo of entering "0360..."
+instead of "0306...". If exactly one such swap fixes it, the corrected code
+is appended as a fifth column:
+
+```
+$ printf '5657585951\n' | cargo run --release
+5657585951	INVALID	checksum mismatch: expected check digit 'X', found '1'	possible transposition -> 5655785951
+```
+
+If no single swap fixes it, or more than one swap would (so there's no way
+to tell which correction is right), nothing is appended and the row is
+reported as plain invalid input.
+
 ## What's checked
 
 - **ISBN-10**: 9 digits plus a check digit in `0-9` or `X`, verified with the
@@ -81,12 +95,16 @@ The flag and the file path can be given in either order.
 - **Registration-group hyphenation**: the ISBN-13 form is also shown split
   into its prefix, group, registrant, and publisher segments where that
   boundary data is available (see the note above on coverage).
+- **Single-transposition repair**: a checksum failure caused by one adjacent
+  digit swap is detected and the corrected code is suggested, as long as the
+  fix is unambiguous.
 
 ## Status
 
 Early skeleton. Checksum validation, conversion, file input,
-registration-group hyphenation for the ISBN-13 form, and batch summaries
-work; see the roadmap for what's still missing (transposition repair).
+registration-group hyphenation for the ISBN-13 form, batch summaries, and
+single-transposition repair work. UPC-A/ISSN support and a separate library
+crate are still on the roadmap.
 
 ## License
 

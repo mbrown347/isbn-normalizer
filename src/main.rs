@@ -1,6 +1,6 @@
 mod isbn;
 
-use isbn::{hyphenate_isbn13, normalize, to_isbn13, CodeKind, NormalizeError};
+use isbn::{hyphenate_isbn13, normalize, suggest_repair, to_isbn13, CodeKind, NormalizeError};
 use std::env;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
@@ -112,6 +112,17 @@ fn report(out: &mut impl Write, raw: &str, counts: &mut Counts) -> io::Result<()
             )
         }
         Err(NormalizeError::Empty) => Ok(()),
+        Err(e @ NormalizeError::ChecksumMismatch { .. }) => {
+            counts.invalid += 1;
+            match suggest_repair(raw) {
+                Some(fixed) => writeln!(
+                    out,
+                    "{raw}\tINVALID\t{e}\tpossible transposition -> {}",
+                    fixed.digits
+                ),
+                None => writeln!(out, "{raw}\tINVALID\t{e}"),
+            }
+        }
         Err(e) => {
             counts.invalid += 1;
             writeln!(out, "{raw}\tINVALID\t{e}")

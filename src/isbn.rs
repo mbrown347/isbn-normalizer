@@ -175,6 +175,58 @@ pub fn hyphenate_isbn13(code: &Normalized) -> String {
     }
 }
 
+/// Looks for a single adjacent-digit transposition (e.g. a typist entering
+/// "0360..." instead of "0306...") that would make an otherwise-invalid code
+/// checksum-valid. Returns the repaired digit string only when exactly one
+/// adjacent swap fixes it; if none do, or more than one does, there's no
+/// reliable single correction to suggest.
+fn repair_transposition(cleaned: &str) -> Option<String> {
+    let len = cleaned.len();
+    if len != 10 && len != 13 {
+        return None;
+    }
+    let chars: Vec<char> = cleaned.chars().collect();
+    let mut fix = None;
+    for i in 0..len - 1 {
+        // 'X' only ever belongs at the last position of an ISBN-10; moving
+        // it would produce something that was never a plausible code.
+        if chars[i] == chars[i + 1] || chars[i] == 'X' || chars[i + 1] == 'X' {
+            continue;
+        }
+        let mut swapped = chars.clone();
+        swapped.swap(i, i + 1);
+        let candidate: String = swapped.into_iter().collect();
+        let found = candidate.chars().last().unwrap();
+        let valid = if len == 10 {
+            !candidate[..9].contains('X') && isbn10_checksum_digit(&candidate) == found
+        } else {
+            isbn13_checksum_digit(&candidate) == found
+        };
+        if valid {
+            if fix.is_some() {
+                return None;
+            }
+            fix = Some(candidate);
+        }
+    }
+    fix
+}
+
+/// Cleans the input the same way `normalize` does and, if the result fails
+/// its checksum, checks whether a single adjacent-digit swap would fix it.
+/// Meant to be called after `normalize` returns `ChecksumMismatch`, to offer
+/// a corrected value alongside the error rather than just rejecting the row.
+pub fn suggest_repair(input: &str) -> Option<Normalized> {
+    let cleaned = strip_separators(input).ok()?;
+    let kind = match cleaned.len() {
+        10 => CodeKind::Isbn10,
+        13 => CodeKind::Isbn13,
+        _ => return None,
+    };
+    let digits = repair_transposition(&cleaned)?;
+    Some(Normalized { kind, digits })
+}
+
 // Registration group 0 splits its 8-digit registrant+publisher block by
 // numeric range rather than a fixed position; a registrant "00"-"19"
 // leaves 6 digits for the publisher, "85"-"89" leaves only 3, and so on.
@@ -279,5 +331,28 @@ mod tests {
         let n = normalize("0306406152").unwrap();
         let isbn13 = to_isbn13(&n);
         assert_eq!(hyphenate_isbn13(&isbn13), "978-0-306-40615-7");
+    }
+
+    #[test]
+    fn repairs_unique_adjacent_transposition() {
+        // "5657585951" is "5655785951" (a valid ISBN-10) with the digits at
+        // positions 3 and 4 swapped; no other adjacent swap fixes it.
+        assert!(normalize("5657585951").is_err());
+        let fixed = suggest_repair("5657585951").unwrap();
+        assert_eq!(fixed.kind, CodeKind::Isbn10);
+        assert_eq!(fixed.digits, "5655785951");
+        assert!(normalize(&fixed.digits).is_ok());
+    }
+
+    #[test]
+    fn refuses_to_guess_when_transposition_is_ambiguous() {
+        // Swapping positions 0-1 and positions 4-5 of this ISBN-13 both
+        // happen to produce a valid checksum, so no single fix is reliable.
+        assert!(suggest_repair("9780036406157").is_none());
+    }
+
+    #[test]
+    fn no_transposition_suggested_for_wrong_length_input() {
+        assert!(suggest_repair("12345").is_none());
     }
 }
