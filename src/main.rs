@@ -45,12 +45,14 @@ fn main() -> ExitCode {
 struct Counts {
     isbn10: usize,
     isbn13: usize,
+    upca: usize,
+    issn: usize,
     invalid: usize,
 }
 
 impl Counts {
     fn total(&self) -> usize {
-        self.isbn10 + self.isbn13 + self.invalid
+        self.isbn10 + self.isbn13 + self.upca + self.issn + self.invalid
     }
 }
 
@@ -58,10 +60,12 @@ impl std::fmt::Display for Counts {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} lines: {} valid ISBN-10, {} valid ISBN-13, {} invalid",
+            "{} lines: {} valid ISBN-10, {} valid ISBN-13, {} valid UPC-A, {} valid ISSN, {} invalid",
             self.total(),
             self.isbn10,
             self.isbn13,
+            self.upca,
+            self.issn,
             self.invalid
         )
     }
@@ -102,14 +106,23 @@ fn report(out: &mut impl Write, raw: &str, counts: &mut Counts) -> io::Result<()
             match code.kind {
                 CodeKind::Isbn10 => counts.isbn10 += 1,
                 CodeKind::Isbn13 => counts.isbn13 += 1,
+                CodeKind::UpcA => counts.upca += 1,
+                CodeKind::Issn => counts.issn += 1,
             }
-            let isbn13 = to_isbn13(&code);
-            let hyphenated = hyphenate_isbn13(&isbn13);
-            writeln!(
-                out,
-                "{raw}\t{:?}\t{}\t{}\t{}",
-                code.kind, code.digits, isbn13.digits, hyphenated
-            )
+            match code.kind {
+                CodeKind::Isbn10 | CodeKind::Isbn13 => {
+                    let isbn13 = to_isbn13(&code);
+                    let hyphenated = hyphenate_isbn13(&isbn13);
+                    writeln!(
+                        out,
+                        "{raw}\t{:?}\t{}\t{}\t{}",
+                        code.kind, code.digits, isbn13.digits, hyphenated
+                    )
+                }
+                CodeKind::UpcA | CodeKind::Issn => {
+                    writeln!(out, "{raw}\t{:?}\t{}", code.kind, code.digits)
+                }
+            }
         }
         Err(NormalizeError::Empty) => Ok(()),
         Err(e @ NormalizeError::ChecksumMismatch { .. }) => {

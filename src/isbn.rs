@@ -1,4 +1,5 @@
-//! Checksum validation and normalization for ISBN-10 and ISBN-13/EAN-13 codes.
+//! Checksum validation and normalization for ISBN-10, ISBN-13/EAN-13, UPC-A,
+//! and ISSN codes.
 
 use std::fmt;
 
@@ -6,6 +7,8 @@ use std::fmt;
 pub enum CodeKind {
     Isbn10,
     Isbn13,
+    UpcA,
+    Issn,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -21,7 +24,7 @@ impl fmt::Display for NormalizeError {
         match self {
             NormalizeError::Empty => write!(f, "empty input"),
             NormalizeError::WrongLength(n) => {
-                write!(f, "expected 10 or 13 digits after cleanup, got {n}")
+                write!(f, "expected 8, 10, 12, or 13 digits after cleanup, got {n}")
             }
             NormalizeError::BadCharacter(c) => write!(f, "unexpected character '{c}'"),
             NormalizeError::ChecksumMismatch { expected, found } => write!(
@@ -81,6 +84,39 @@ fn isbn13_checksum_digit(digits: &str) -> char {
     std::char::from_digit((10 - (sum % 10)) % 10, 10).unwrap()
 }
 
+// UPC-A uses the same alternating 1/3 weighting as EAN-13, but starting on
+// the other foot: the first of the 11 significant digits gets weight 3, not
+// 1. That's a consequence of UPC-A being an EAN-13 with a leading zero
+// stripped off (the zero sits at an even index, flipping the parity of
+// everything after it).
+fn upca_checksum_digit(digits: &str) -> char {
+    let sum: u32 = digits
+        .chars()
+        .take(11)
+        .enumerate()
+        .map(|(i, c)| {
+            let weight = if i % 2 == 0 { 3 } else { 1 };
+            weight * c.to_digit(10).unwrap()
+        })
+        .sum();
+    std::char::from_digit((10 - (sum % 10)) % 10, 10).unwrap()
+}
+
+// ISSN uses the same modulus-11 descending-weight scheme as ISBN-10, just
+// over 7 data digits (weights 8 down to 2) instead of 9.
+fn issn_checksum_digit(digits: &str) -> char {
+    let sum: u32 = digits
+        .chars()
+        .take(7)
+        .enumerate()
+        .map(|(i, c)| (8 - i as u32) * c.to_digit(10).unwrap())
+        .sum();
+    match (11 - (sum % 11)) % 11 {
+        10 => 'X',
+        n => std::char::from_digit(n, 10).unwrap(),
+    }
+}
+
 /// Cleans a single ISBN/EAN string and checks its final digit against the
 /// checksum computed from the rest.
 pub fn normalize(input: &str) -> Result<Normalized, NormalizeError> {
@@ -89,6 +125,20 @@ pub fn normalize(input: &str) -> Result<Normalized, NormalizeError> {
         return Err(NormalizeError::Empty);
     }
     match cleaned.len() {
+        8 => {
+            if cleaned[..7].contains('X') {
+                return Err(NormalizeError::BadCharacter('X'));
+            }
+            let expected = issn_checksum_digit(&cleaned);
+            let found = cleaned.chars().last().unwrap();
+            if expected != found {
+                return Err(NormalizeError::ChecksumMismatch { expected, found });
+            }
+            Ok(Normalized {
+                kind: CodeKind::Issn,
+                digits: cleaned,
+            })
+        }
         10 => {
             if cleaned[..9].contains('X') {
                 return Err(NormalizeError::BadCharacter('X'));
@@ -100,6 +150,20 @@ pub fn normalize(input: &str) -> Result<Normalized, NormalizeError> {
             }
             Ok(Normalized {
                 kind: CodeKind::Isbn10,
+                digits: cleaned,
+            })
+        }
+        12 => {
+            if cleaned.contains('X') {
+                return Err(NormalizeError::BadCharacter('X'));
+            }
+            let expected = upca_checksum_digit(&cleaned);
+            let found = cleaned.chars().last().unwrap();
+            if expected != found {
+                return Err(NormalizeError::ChecksumMismatch { expected, found });
+            }
+            Ok(Normalized {
+                kind: CodeKind::UpcA,
                 digits: cleaned,
             })
         }
@@ -122,7 +186,8 @@ pub fn normalize(input: &str) -> Result<Normalized, NormalizeError> {
 }
 
 /// Converts a valid ISBN-10 to its ISBN-13 form (978 prefix, recomputed
-/// check digit). ISBN-13 input is returned unchanged.
+/// check digit). ISBN-13 input is returned unchanged. UPC-A and ISSN have no
+/// ISBN-13 equivalent, so callers should only invoke this for book codes.
 pub fn to_isbn13(code: &Normalized) -> Normalized {
     match code.kind {
         CodeKind::Isbn13 => Normalized {
@@ -140,6 +205,10 @@ pub fn to_isbn13(code: &Normalized) -> Normalized {
                 digits,
             }
         }
+        CodeKind::UpcA | CodeKind::Issn => Normalized {
+            kind: code.kind,
+            digits: code.digits.clone(),
+        },
     }
 }
 
@@ -182,14 +251,14 @@ pub fn hyphenate_isbn13(code: &Normalized) -> String {
 /// reliable single correction to suggest.
 fn repair_transposition(cleaned: &str) -> Option<String> {
     let len = cleaned.len();
-    if len != 10 && len != 13 {
+    if len != 8 && len != 10 && len != 12 && len != 13 {
         return None;
     }
     let chars: Vec<char> = cleaned.chars().collect();
     let mut fix = None;
     for i in 0..len - 1 {
-        // 'X' only ever belongs at the last position of an ISBN-10; moving
-        // it would produce something that was never a plausible code.
+        // 'X' only ever belongs at the last position of an ISBN-10 or ISSN;
+        // moving it would produce something that was never a plausible code.
         if chars[i] == chars[i + 1] || chars[i] == 'X' || chars[i + 1] == 'X' {
             continue;
         }
@@ -197,10 +266,11 @@ fn repair_transposition(cleaned: &str) -> Option<String> {
         swapped.swap(i, i + 1);
         let candidate: String = swapped.into_iter().collect();
         let found = candidate.chars().last().unwrap();
-        let valid = if len == 10 {
-            !candidate[..9].contains('X') && isbn10_checksum_digit(&candidate) == found
-        } else {
-            isbn13_checksum_digit(&candidate) == found
+        let valid = match len {
+            8 => !candidate[..7].contains('X') && issn_checksum_digit(&candidate) == found,
+            10 => !candidate[..9].contains('X') && isbn10_checksum_digit(&candidate) == found,
+            12 => upca_checksum_digit(&candidate) == found,
+            _ => isbn13_checksum_digit(&candidate) == found,
         };
         if valid {
             if fix.is_some() {
@@ -219,7 +289,9 @@ fn repair_transposition(cleaned: &str) -> Option<String> {
 pub fn suggest_repair(input: &str) -> Option<Normalized> {
     let cleaned = strip_separators(input).ok()?;
     let kind = match cleaned.len() {
+        8 => CodeKind::Issn,
         10 => CodeKind::Isbn10,
+        12 => CodeKind::UpcA,
         13 => CodeKind::Isbn13,
         _ => return None,
     };
@@ -354,5 +426,78 @@ mod tests {
     #[test]
     fn no_transposition_suggested_for_wrong_length_input() {
         assert!(suggest_repair("12345").is_none());
+    }
+
+    #[test]
+    fn accepts_clean_upca() {
+        // A real cereal-box UPC-A.
+        let n = normalize("036000291452").unwrap();
+        assert_eq!(n.kind, CodeKind::UpcA);
+        assert_eq!(n.digits, "036000291452");
+    }
+
+    #[test]
+    fn rejects_bad_upca_checksum() {
+        let err = normalize("036000291453").unwrap_err();
+        assert_eq!(
+            err,
+            NormalizeError::ChecksumMismatch {
+                expected: '2',
+                found: '3'
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_x_in_upca() {
+        assert_eq!(
+            normalize("03600029145X").unwrap_err(),
+            NormalizeError::BadCharacter('X')
+        );
+    }
+
+    #[test]
+    fn accepts_clean_issn() {
+        let n = normalize("1234-5679").unwrap();
+        assert_eq!(n.kind, CodeKind::Issn);
+        assert_eq!(n.digits, "12345679");
+    }
+
+    #[test]
+    fn rejects_bad_issn_checksum() {
+        let err = normalize("12345678").unwrap_err();
+        assert_eq!(
+            err,
+            NormalizeError::ChecksumMismatch {
+                expected: '9',
+                found: '8'
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_x_before_last_position_in_issn() {
+        assert_eq!(
+            normalize("123X5679").unwrap_err(),
+            NormalizeError::BadCharacter('X')
+        );
+    }
+
+    #[test]
+    fn to_isbn13_passes_through_upca_and_issn_unchanged() {
+        let upca = normalize("036000291452").unwrap();
+        assert_eq!(to_isbn13(&upca), upca);
+        let issn = normalize("1234-5679").unwrap();
+        assert_eq!(to_isbn13(&issn), issn);
+    }
+
+    #[test]
+    fn repairs_adjacent_transposition_in_upca() {
+        // "036000291542" has the 10th and 11th digits of the real UPC-A
+        // "036000291452" swapped, and no other adjacent swap fixes it.
+        assert!(normalize("036000291542").is_err());
+        let fixed = suggest_repair("036000291542").unwrap();
+        assert_eq!(fixed.kind, CodeKind::UpcA);
+        assert_eq!(fixed.digits, "036000291452");
     }
 }
